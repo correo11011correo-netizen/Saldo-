@@ -1,29 +1,33 @@
-# 🚀 Crypto Hunter Pro v5.2 (Offline Search Engine)
+# 🚀 Crypto Empire Pro v6.0 (Offline Search & MEV Arbitrage)
 
-Este repositorio contiene herramientas de **Alto Rendimiento** para la búsqueda de frases mnemónicas (BIP39) con saldo en las redes de Ethereum y Bitcoin, además de un generador de direcciones de vanidad.
+Este repositorio contiene una suite de herramientas de **Nivel Ingeniero** para la generación de ingresos en la Blockchain.
 
 ---
 
-## 📁 Estructura del Repositorio
-
-### 🔹 `/eth` (Ethereum Hunter)
-*   `eth_hunter.py`: Motor profesional para Ethereum.
-*   **Uso:** `python3 eth/eth_hunter.py`
-*   **Funcionamiento:** Descarga automáticamente los 120 millones de direcciones con saldo y las indexa en RAM (~500MB).
-
-### 🔹 `/btc` (Bitcoin Hunter)
-*   `btc_hunter.py`: Motor profesional para Bitcoin.
-*   **Uso:** `python3 btc/btc_hunter.py`
-*   **Funcionamiento:** Descarga los 52 millones de direcciones con saldo y prueba los formatos Legacy y Bech32 en cada semilla.
+## 📁 Estructura de la Suite
 
 ### 🔹 `/vanity` (Vanity Miner)
-*   `vanity_miner.py`: Generador de direcciones mnemónicas "raras".
-*   **Uso:** `python3 vanity/vanity_miner.py`
-*   **Funcionamiento:** Busca patrones como `0x0000`, `0x1111`, `0xCAFE`, `0xBACA`, etc., y los guarda en `VANITY_WALLETS.txt`.
+*   **Función:** Generador masivo de direcciones mnemónicas con patrones raros.
+*   **Resultados:** Guarda en `VANITY_WALLETS.txt`.
+
+### 🔹 `/mev` (MEV Arbitrage Pro)
+*   **Función:** Bot de arbitraje de alta frecuencia usando **Flash Loans** (Aave V3).
+*   **Capital Requerido:** $0 (Préstamos de hasta $1,000,000).
+*   **Contrato:** `FlashArb.sol` (Desplegado en Polygon).
+
+### 🔹 `/eth` & `/btc` (Offline Hunters)
+*   **Función:** Motores de búsqueda basados en Filtros de Bloom para encontrar wallets con saldo.
 
 ---
 
-## 📜 Logs y Resultados
-*   Si se encuentra un acierto, los datos se guardarán automáticamente en archivos llamados `GOLD_FUNDS.txt`, `BTC_SUCCESS.txt` o `VANITY_WALLETS.txt`.
+## ⚡ Guía de Inicio MEV (Polygon)
+1. **Despliegue:** `python3 mev/deploy.py` (Requiere ~1 MATIC para gas).
+2. **Ejecución:** `python3 mev/real_bot.py`
 
-*Desarrollado con arquitectura de ingeniería de alto nivel para maximizar las probabilidades de éxito.*
+---
+
+## 📜 Seguridad y Logs
+*   Los archivos de claves privadas (`MEV_WALLET_SECRET.txt`) están protegidos por `.gitignore` y **NUNCA** se subirán al repositorio público.
+*   Todas las ganancias se envían automáticamente a la wallet configurada en el despliegue.
+
+*Arquitectura de ingeniería de alto nivel diseñada para el máximo rendimiento.*
