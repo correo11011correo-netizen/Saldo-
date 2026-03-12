@@ -5,19 +5,35 @@ import struct
 import time
 import requests
 from ecdsa import SECP256k1, SigningKey
-from eth_hash.auto import keccak  # Keccak-256 real, mismo que Ethereum
+from eth_hash.auto import keccak
+from mnemonic import Mnemonic
 
 # ============================
-#   BIP39
+#   BIP39 & WALLET ENGINE
 # ============================
 
-def mnemonic_to_seed(mnemonic: str, passphrase: str = "") -> bytes:
-    mnemonic = mnemonic.strip()
-    salt = ("mnemonic" + passphrase).encode("utf-8")
-    return hashlib.pbkdf2_hmac("sha512", mnemonic.encode("utf-8"), salt, 2048, dklen=64)
+mnemo = Mnemonic("english")
+# Dirección real para TEST de sistema (Beacon Deposit Contract)
+REAL_TEST_ADDR = "0x00000000219ab540356cBB839Cbe05303d7705Fa"
+
+# LISTA DE RPCs PÚBLICOS (ROTATIVOS)
+RPC_NODES = [
+    "https://cloudflare-eth.com",
+    "https://eth.llamarpc.com",
+    "https://rpc.ankr.com/eth",
+    "https://ethereum.publicnode.com",
+    "https://1rpc.io/eth"
+]
+CURRENT_RPC_INDEX = 0
+
+def generate_secure_mnemonic():
+    return mnemo.to_mnemonic(os.urandom(16))
+
+def mnemonic_to_seed(mnemonic: str) -> bytes:
+    return hashlib.pbkdf2_hmac("sha512", mnemonic.encode("utf-8"), b"mnemonic", 2048, dklen=64)
 
 # ============================
-#   BIP32
+#   BIP32 / BIP44 DERIVATION
 # ============================
 
 def hmac_sha512(key: bytes, data: bytes) -> bytes:
@@ -27,180 +43,152 @@ def bip32_master_key(seed: bytes):
     I = hmac_sha512(b"Bitcoin seed", seed)
     return I[:32], I[32:]
 
-def privkey_to_pubkey_uncompressed(privkey: bytes) -> bytes:
-    sk = SigningKey.from_string(privkey, curve=SECP256k1)
-    vk = sk.get_verifying_key()
-    x = vk.pubkey.point.x()
-    y = vk.pubkey.point.y()
-    return b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
-
 def ckd_priv(k_par: bytes, c_par: bytes, index: int):
-    # Child Key Derivation privado (BIP32)
-    if index >= 0x80000000:
-        data = b"\x00" + k_par + struct.pack(">L", index)
-    else:
-        pub = privkey_to_pubkey_uncompressed(k_par)
-        data = pub + struct.pack(">L", index)
+    sk = SigningKey.from_string(k_par, curve=SECP256k1)
+    pub = b"\x04" + sk.get_verifying_key().to_string()
+    data = pub + struct.pack(">L", index)
     I = hmac_sha512(c_par, data)
     I_L, I_R = I[:32], I[32:]
     k_int = (int.from_bytes(I_L, "big") + int.from_bytes(k_par, "big")) % SECP256k1.order
-    if k_int == 0:
-        raise ValueError("Derivación inválida (k_int = 0)")
     return k_int.to_bytes(32, "big"), I_R
 
 def derive_path(master_priv: bytes, master_chain: bytes, path: str):
-    # Deriva cualquier path tipo: m/44'/60'/0'/0/0
-    if not path.startswith("m/"):
-        raise ValueError("Path inválido, debe empezar con m/")
     segments = path.lstrip("m/").split("/")
     k, c = master_priv, master_chain
     for seg in segments:
-        if seg.endswith("'"):
-            index = int(seg[:-1]) + 0x80000000
-        else:
-            index = int(seg)
+        if not seg: continue
+        index = int(seg[:-1]) + 0x80000000 if seg.endswith("'") else int(seg)
         k, c = ckd_priv(k, c, index)
     return k, c
 
 # ============================
-#   ETH ADDRESS (Keccak real)
+#   ETHEREUM UTILS
 # ============================
-
-def keccak_256(data: bytes) -> bytes:
-    # Keccak real, mismo que usa Ethereum
-    return keccak(data)
-
-def to_checksum_address(addr_hex_noprefix: str) -> str:
-    addr_lower = addr_hex_noprefix.lower()
-    keccak_hex = keccak_256(addr_lower.encode("utf-8")).hex()
-    out = ""
-    for c, k in zip(addr_lower, keccak_hex):
-        if c.isalpha() and int(k, 16) >= 8:
-            out += c.upper()
-        else:
-            out += c
-    return out
 
 def privkey_to_eth_address(privkey: bytes) -> str:
-    pub = privkey_to_pubkey_uncompressed(privkey)
-    # Ethereum: Keccak-256 de la pubkey sin el 0x04
-    k = keccak_256(pub[1:])
-    addr = k[-20:].hex()
-    return "0x" + to_checksum_address(addr)
+    sk = SigningKey.from_string(privkey, curve=SECP256k1)
+    pub = b"\x04" + sk.get_verifying_key().to_string()
+    k = keccak(pub[1:])
+    addr = k[-20:].hex().lower()
+    keccak_addr = keccak(addr.encode("utf-8")).hex()
+    checksum_addr = "0x"
+    for i, char in enumerate(addr):
+        if char.isalpha() and int(keccak_addr[i], 16) >= 8:
+            checksum_addr += char.upper()
+        else:
+            checksum_addr += char
+    return checksum_addr
 
 # ============================
-#   MULTI-RPC ETH
+#   JSON-RPC MULTI-NODE ENGINE
 # ============================
 
-TEST_ADDR = "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe"
-
-RPCS = [
-    {
-        "name": "blockchair",
-        "url": lambda a: f"https://api.blockchair.com/ethereum/dashboards/address/{a}",
-        "parser": lambda r, a: int(r.json()["data"][a.lower()]["address"]["balance"])
-    },
-    {
-        "name": "blockcypher",
-        "url": lambda a: f"https://api.blockcypher.com/v1/eth/main/addrs/{a}/balance",
-        "parser": lambda r, a: int(r.json()["balance"])
-    },
-    {
-        "name": "ethplorer",
-        "url": lambda a: f"https://api.ethplorer.io/getAddressInfo/{a}?apiKey=freekey",
-        "parser": lambda r, a: int(r.json()["ETH"]["rawBalance"])
-    }
-]
-
-def try_rpc_eth(rpc, address):
-    try:
-        r = requests.get(rpc["url"](address), timeout=10)
-        if r.status_code != 200:
-            return None
-        return rpc["parser"](r, address)
-    except Exception:
-        return None
-
-def select_working_rpc():
-    for rpc in RPCS:
-        bal = try_rpc_eth(rpc, TEST_ADDR)
-        if bal is not None:
-            print(f"✔ RPC ETH activo: {rpc['name']} (test balance: {bal} wei)")
-            return rpc
-    print("❌ Ningún RPC ETH funciona.")
+def call_rpc(method, params):
+    global CURRENT_RPC_INDEX
+    
+    # Reintentamos con cada nodo de la lista si hay fallos
+    for _ in range(len(RPC_NODES)):
+        rpc_url = RPC_NODES[CURRENT_RPC_INDEX]
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": 1
+        }
+        try:
+            r = requests.post(rpc_url, json=payload, timeout=5)
+            if r.status_code == 200:
+                result = r.json().get("result")
+                if result is not None:
+                    return result
+        except:
+            pass
+        
+        # Si falla, saltamos al siguiente RPC
+        CURRENT_RPC_INDEX = (CURRENT_RPC_INDEX + 1) % len(RPC_NODES)
+    
     return None
 
-RPC_ACTIVO = None
-
-def get_balance_wei(address: str) -> int:
-    global RPC_ACTIVO
-    if RPC_ACTIVO:
-        bal = try_rpc_eth(RPC_ACTIVO, address)
-        if bal is not None:
-            return bal
-        print(f"⚠ RPC falló: {RPC_ACTIVO['name']} → cambiando...")
-    RPC_ACTIVO = select_working_rpc()
-    if RPC_ACTIVO:
-        bal = try_rpc_eth(RPC_ACTIVO, address)
-        if bal is not None:
-            return bal
-    return -1
-
-# ============================
-#   MAIN
-# ============================
+def get_eth_data(address: str):
+    # Consulta de Balance (eth_getBalance)
+    bal_hex = call_rpc("eth_getBalance", [address, "latest"])
+    if bal_hex is None: return None
+    balance = int(bal_hex, 16)
+    
+    # Consulta de Historial (eth_getTransactionCount / Nonce)
+    nonce_hex = call_rpc("eth_getTransactionCount", [address, "latest"])
+    nonce = int(nonce_hex, 16) if nonce_hex else 0
+    
+    return {"balance": balance, "tx_count": nonce}
 
 def main():
-    global RPC_ACTIVO
-
-    print("=== ETH BIP39 HUNTER — SOLO 2 CUENTAS ===")
-    print("Path: m/44'/60'/0'/0/i (MetaMask / Binance compatible)\n")
-
-    mnemonic = input("Ingrese su frase de 12 palabras: ").strip()
-    seed = mnemonic_to_seed(mnemonic)
-    master_priv, master_chain = bip32_master_key(seed)
-
-    base_path = "m/44'/60'/0'/0"
-    base_priv, base_chain = derive_path(master_priv, master_chain, base_path)
-
-    RPC_ACTIVO = select_working_rpc()
-    if RPC_ACTIVO is None:
+    print(f"=== ETH MULTI-NODE HUNTER v4.0 (JSON-RPC) ===")
+    print(f"[*] Nodos configurados: {len(RPC_NODES)}")
+    
+    # --- PRUEBA DE RED INICIAL ---
+    print(f"\n[?] Verificando conexión inicial con dirección real...")
+    test = get_eth_data(REAL_TEST_ADDR)
+    if test and test["balance"] > 0:
+        print(f"✅ SISTEMA ONLINE! Saldo de TEST detectado: {test['balance']/10**18} ETH")
+        print(f"[*] Nodo activo: {RPC_NODES[CURRENT_RPC_INDEX]}\n")
+    else:
+        print(f"❌ ERROR CRÍTICO! No se pudo conectar con los nodos RPC o no hay internet.")
         return
+    
+    paths = [
+        "m/44'/60'/0'/0/0",  # Account 1 (MetaMask/Binance)
+        "m/44'/60'/0'/0",    # Legacy
+    ]
+    
+    count = 0
+    start_time = time.time()
 
-    for index in range(2):  # SOLO CUENTAS 0 y 1
-        priv_child, _ = ckd_priv(base_priv, base_chain, index)
-        priv_hex = priv_child.hex()
-        address = privkey_to_eth_address(priv_child)
+    while True:
+        count += 1
+        
+        # TEST DE SISTEMA PERIÓDICO (Cada 100 semillas)
+        if count % 100 == 0:
+            test = get_eth_data(REAL_TEST_ADDR)
+            if not test or test["balance"] == 0:
+                print(f"❌ FALLO DE RED! Esperando 30s...")
+                time.sleep(30)
+                continue
 
-        balance = get_balance_wei(address)
+        mnemonic = generate_secure_mnemonic()
+        seed = mnemonic_to_seed(mnemonic)
+        m_priv, m_chain = bip32_master_key(seed)
 
-        print(f"[{index}] {address} | balance: {balance} wei")
+        if count % 20 == 0:
+            print(f"[*] Procesando... Seeds: {count} | RPC: {RPC_NODES[CURRENT_RPC_INDEX]}")
 
-        # Último formulario
-        with open("eth_formulario.txt", "w") as f:
-            f.write(f"Index: {index}\n")
-            f.write(f"Path: {base_path}/{index}\n")
-            f.write(f"Private key: {priv_hex}\n")
-            f.write(f"Address: {address}\n")
-            f.write(f"Balance: {balance} wei\n")
+        for path in paths:
+            try:
+                priv, _ = derive_path(m_priv, m_chain, path)
+                address = privkey_to_eth_address(priv)
+                
+                data = get_eth_data(address)
+                if not data: continue
 
-        # Si tiene fondos, registro
-        if balance > 0:
-            with open("eth_with_funds.txt", "a") as f:
-                f.write(f"{index} | {address} | {priv_hex} | {balance} wei\n")
+                balance = data["balance"]
+                txs = data["tx_count"]
 
-            with open("eth_found_wallets.txt", "a") as f:
-                f.write("=====================================\n")
-                f.write(f"Index: {index}\n")
-                f.write(f"Path: {base_path}/{index}\n")
-                f.write(f"Dirección: {address}\n")
-                f.write(f"Clave privada: {priv_hex}\n")
-                f.write(f"Balance: {balance} wei\n")
-                f.write(f"RPC usado: {RPC_ACTIVO['name']}\n")
-                f.write(f"Timestamp: {time.ctime()}\n")
-                f.write("=====================================\n\n")
+                if balance > 0 or txs > 0:
+                    status = "🔥 DINERO ENCONTRADO" if balance > 0 else "💎 HISTORIAL DETECTADO"
+                    eth_val = balance / 10**18
+                    
+                    print(f"\n{status} en {path}")
+                    print(f"ADDR: {address} | BAL: {eth_val} ETH | TXS: {txs}")
+                    print(f"SEED: {mnemonic}\n")
 
-            print(f"🔥 ENCONTRADO FONDO ETH: {address} → {balance} wei")
+                    filename = "GOLD_FUNDS.txt" if balance > 0 else "HISTORY_ACTIVE.txt"
+                    with open(filename, "a") as f:
+                        f.write(f"SEED: {mnemonic}\nPATH: {path}\nADDR: {address}\nBAL: {eth_val} ETH\nTXS: {txs}\nPRIV: {priv.hex()}\n\n")
+
+            except Exception:
+                continue
+        
+        # Ya no necesitamos esperas tan largas, el sistema multinodo es más resistente.
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
