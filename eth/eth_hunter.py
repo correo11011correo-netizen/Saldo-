@@ -45,18 +45,23 @@ ADDRESSES_URL = "https://gz.blockchair.com/ethereum/addresses/blockchair_ethereu
 LOCAL_GZ_FILE = "eth_addresses_latest.tsv.gz"
 
 def load_all_addresses(bloom_filter):
-    # 1. Descargar si no existe (Ahorramos ancho de banda)
+    # 1. Descargar con aria2c (Estilo IDM - Multi-hilo)
     if not os.path.exists(LOCAL_GZ_FILE):
-        print("[*] Descargando Snapshot de 120M de direcciones... (Esto puede tardar unos minutos)")
-        r = requests.get(ADDRESSES_URL, stream=True)
-        total_size = int(r.headers.get('content-length', 0))
-        with open(LOCAL_GZ_FILE, 'wb') as f, tqdm(total=total_size, unit='B', unit_scale=True) as bar:
-            for data in r.iter_content(chunk_size=1024*1024):
-                f.write(data)
-                bar.update(len(data))
+        print("[*] Iniciando descarga acelerada con aria2c (16 conexiones)...")
+        import subprocess
+        try:
+            # -x16 (16 conexiones por servidor), -s16 (16 hilos), -k1M (fragmentos de 1MB)
+            cmd = ["aria2c", "-x16", "-s16", "-k1M", "--console-log-level=warn", ADDRESSES_URL, "-o", LOCAL_GZ_FILE]
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"❌ Error en descarga acelerada: {e}. Reintentando con método normal...")
+            # Fallback a método normal si aria2 falla
+            r = requests.get(ADDRESSES_URL, stream=True)
+            with open(LOCAL_GZ_FILE, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
     
-    # 2. Cargar en Bloom Filter (Sin descomprimir a disco para no gastar espacio)
-    print("\n[*] Cargando direcciones en la RAM... (Paciencia, son 120 millones)")
+    # 2. Cargar en Bloom Filter
+    print("\n[*] Cargando 120M de direcciones en la RAM...")
     with gzip.open(LOCAL_GZ_FILE, 'rt') as f:
         # Saltar la cabecera
         next(f)

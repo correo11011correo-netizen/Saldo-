@@ -45,14 +45,20 @@ BTC_URL = "https://gz.blockchair.com/bitcoin/addresses/blockchair_bitcoin_addres
 BTC_GZ_FILE = "btc_addresses_latest.tsv.gz"
 
 def load_btc_addresses(bf):
+    # 1. Descargar con aria2c (Estilo IDM - Multi-hilo)
     if not os.path.exists(BTC_GZ_FILE):
-        print("[*] Descargando Snapshot de 52M de Bitcoin...")
-        r = requests.get(BTC_URL, stream=True)
-        total_size = int(r.headers.get('content-length', 0))
-        with open(BTC_GZ_FILE, 'wb') as f, tqdm(total=total_size, unit='B', unit_scale=True) as bar:
-            for data in r.iter_content(chunk_size=1024*1024):
-                f.write(data)
-                bar.update(len(data))
+        print("[*] Iniciando descarga acelerada de Bitcoin con aria2c (16 conexiones)...")
+        import subprocess
+        try:
+            # -x16 (16 conexiones), -s16 (16 hilos)
+            cmd = ["aria2c", "-x16", "-s16", "-k1M", "--console-log-level=warn", BTC_URL, "-o", BTC_GZ_FILE]
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"❌ Error en descarga acelerada: {e}")
+            # Fallback
+            r = requests.get(BTC_URL, stream=True)
+            with open(BTC_GZ_FILE, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
     
     print("\n[*] Indexando 52M de direcciones BTC en RAM...")
     with gzip.open(BTC_GZ_FILE, 'rt') as f:

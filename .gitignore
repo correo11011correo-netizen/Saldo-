@@ -1,0 +1,5 @@
+*.gz
+*.log
+VANITY_WALLETS.txt
+GOLD_FUNDS.txt
+HISTORY_ACTIVE.txt
