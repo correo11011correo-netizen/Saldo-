@@ -3,7 +3,7 @@ from web3 import Web3
 from datetime import datetime
 import concurrent.futures
 
-# CONFIGURACIÓN PROFESIONAL
+# CONFIGURACIÓN PROFESIONAL v6.0 SWEEP + MONITOR
 RPC = "https://polygon-bor-rpc.publicnode.com"
 w3 = Web3(Web3.HTTPProvider(RPC))
 
@@ -32,46 +32,65 @@ quick_c = w3.eth.contract(address=QUICK_ROUTER, abi=ROUTER_ABI)
 sushi_c = w3.eth.contract(address=SUSHI_ROUTER, abi=ROUTER_ABI)
 mev_c = w3.eth.contract(address=CONTRACT_ADDR, abi=CONTRACT_ABI)
 
+SWEEP_LEVELS = [200, 1000, 5000, 20000, 110000]
+
 def log_event(msg):
     with open("mev_pro.log", "a") as f:
         f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
 
-def check_pair(base, target):
+def check_best_amount(base, target):
     b_addr, t_addr = TOKENS[base], TOKENS[target]
-    amount_in = w3.to_wei(5000, 'ether') if base == "WMATIC" else w3.to_wei(5000, 'mwei')
+    best_profit = -999
+    best_amount = 0
+    results = {}
     
-    try:
-        out_q = quick_c.functions.getAmountsOut(amount_in, [b_addr, t_addr]).call()[1]
-        out_s = sushi_c.functions.getAmountsOut(out_q, [t_addr, b_addr]).call()[1]
+    for level in SWEEP_LEVELS:
+        dec = 18 if base in ["WMATIC", "WETH", "DAI"] else 6
+        amount_in = w3.to_wei(level, 'ether') if dec == 18 else int(level * 10**6)
         
-        profit = out_s - amount_in
-        
-        # Guardar estadísticas para el monitor
-        with open("stats.json", "w") as s:
-            json.dump({"last_scan": f"{base}/{target}", "gas": w3.eth.gas_price / 10**9, "profit": float(w3.from_wei(profit, 'ether'))}, s)
-        
-        if profit > w3.to_wei(0.1, 'ether'):
-            log_event(f"🚀 HIT DETECTADO: {base}/{target} | Profit: {w3.from_wei(profit, 'ether')} POL")
-            nonce = w3.eth.get_transaction_count(MY_ADDR)
-            tx = mev_c.functions.requestFlashLoan(b_addr, amount_in, t_addr).build_transaction({
-                'chainId': 137, 'gas': 1200000, 'gasPrice': int(w3.eth.gas_price * 1.5), 'from': MY_ADDR, 'nonce': nonce
-            })
-            signed = w3.eth.account.sign_transaction(tx, MY_PRIV)
-            tx_h = w3.eth.send_raw_transaction(signed.raw_transaction)
-            with open("HITS_FOUND.txt", "a") as h:
-                h.write(f"{datetime.now()}: TX {tx_h.hex()} | Pair {base}/{target}\n")
-            return True
-    except Exception as e:
-        pass
-    return False
+        try:
+            out_q = quick_c.functions.getAmountsOut(amount_in, [b_addr, t_addr]).call()[1]
+            out_s = sushi_c.functions.getAmountsOut(out_q, [t_addr, b_addr]).call()[1]
+            profit = out_s - amount_in
+            results[str(level)] = float(w3.from_wei(profit, 'ether'))
+            
+            if profit > best_profit:
+                best_profit = profit
+                best_amount = amount_in
+        except: continue
+    
+    # Enviar datos al monitor
+    with open("stats.json", "w") as s:
+        json.dump({
+            "pair": f"{base}/{target}",
+            "gas": w3.eth.gas_price / 10**9,
+            "levels": results,
+            "best_profit": float(w3.from_wei(best_profit, 'ether')),
+            "block": w3.eth.block_number,
+            "time": datetime.now().strftime('%H:%M:%S')
+        }, s)
+
+    if best_profit > w3.to_wei(0.08, 'ether'):
+        execute_strike(base, target, best_amount, best_profit)
+
+def execute_strike(base, target, amount, profit):
+    b_addr, t_addr = TOKENS[base], TOKENS[target]
+    log_event(f"🎯 BARRIDO EXITOSO: {base}/{target} | Monto: {amount} | Profit: {w3.from_wei(profit, 'ether')} POL")
+    nonce = w3.eth.get_transaction_count(MY_ADDR)
+    tx = mev_c.functions.requestFlashLoan(b_addr, amount, t_addr).build_transaction({
+        'chainId': 137, 'gas': 1500000, 'gasPrice': int(w3.eth.gas_price * 1.6), 'from': MY_ADDR, 'nonce': nonce
+    })
+    signed = w3.eth.account.sign_transaction(tx, MY_PRIV)
+    tx_h = w3.eth.send_raw_transaction(signed.raw_transaction)
+    with open("HITS_FOUND.txt", "a") as h:
+        h.write(f"{datetime.now()}: STRIKE {tx_h.hex()} | Amount {amount} | Pair {base}/{target}\n")
 
 def engine():
     pairs = [("WMATIC", "USDC"), ("WMATIC", "USDT"), ("WETH", "USDC"), ("USDC", "USDT"), ("WMATIC", "DAI")]
-    log_event("SISTEMA INICIADO - Patrullando 5 pares principales.")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-        while True:
-            ex.map(lambda p: check_pair(*p), pairs)
-            time.sleep(0.3)
+    while True:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            ex.map(lambda p: check_best_amount(*p), pairs)
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     engine()

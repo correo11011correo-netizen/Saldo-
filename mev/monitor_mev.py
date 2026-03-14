@@ -10,40 +10,37 @@ w3 = Web3(Web3.HTTPProvider(RPC))
 
 def draw():
     os.system('clear')
-    print("="*65)
-    print(f" 🦅 MEV COMMAND CENTER v3.0 | {datetime.now().strftime('%H:%M:%S')}")
-    print("="*65)
+    print("="*70)
+    print(f" 🦅 MEV ULTRA-MONITOR v6.0 | SWEEP MODE ACTIVE | {datetime.now().strftime('%H:%M:%S')}")
+    print("="*70)
     
     try:
         with open("stats.json", "r") as s:
-            data = json.load(s)
-            print(f" 🛰️  Último Escaneo: {data['last_scan']}")
-            print(f" ⛽ Gas Red: {data['gas']:.1f} Gwei")
-            color = "\033[92m" if data['profit'] > 0 else "\033[91m"
-            print(f" 📊 Profit Potencial: {color}{data['profit']:.6f} POL\033[0m")
+            d = json.load(s)
+            print(f" 🛰️  Par Actual: {d['pair']} | 📦 Bloque: {d['block']} | ⛽ Gas: {d['gas']:.1f} Gwei")
+            print("-" * 70)
+            print(f" 📊 BARRIDO DE CAPITAL (Profit Estimado en POL):")
+            for lvl, prof in d['levels'].items():
+                color = "\033[92m" if prof > 0.08 else ("\033[93m" if prof > 0 else "\033[91m")
+                print(f"    ↳ Nivel ${lvl.ljust(6)}: {color}{prof:+.6f} POL\033[0m")
+            
+            print("-" * 70)
+            best_color = "\033[92m" if d['best_profit'] > 0.08 else "\033[94m"
+            print(f" 🚀 MEJOR PROFIT ACTUAL: {best_color}{d['best_profit']:+.6f} POL\033[0m")
     except:
-        print(" [!] Esperando datos del bot...")
+        print(" [!] Sincronizando con el motor de barrido...")
 
-    print("-" * 65)
+    print("-" * 70)
     try:
         bal = w3.from_wei(w3.eth.get_balance(MY_ADDR), 'ether')
         print(f" 💰 Mi Saldo: {bal:.4f} POL")
     except: pass
 
-    print("-" * 65)
-    print(" 📜 ÚLTIMOS EVENTOS (mev_pro.log):")
-    try:
-        os.system("tail -n 5 mev_pro.log")
-    except: pass
-    
-    print("-" * 65)
-    print(" 🚀 HITS RECIENTES (HITS_FOUND.txt):")
-    try:
-        os.system("tail -n 3 HITS_FOUND.txt")
-    except: pass
-    print("="*65)
-    print(" [Presiona Ctrl+C para salir del monitor - El bot seguirá corriendo]")
+    print("-" * 70)
+    print(" 📜 ÚLTIMOS EVENTOS:")
+    os.system("tail -n 3 mev_pro.log")
+    print("="*70)
 
 while True:
     draw()
-    time.sleep(1)
+    time.sleep(0.5)
